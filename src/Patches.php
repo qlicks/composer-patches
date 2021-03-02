@@ -49,6 +49,16 @@ class Patches implements PluginInterface, EventSubscriberInterface {
   protected $patches;
 
   /**
+   * @var array $patchesOptions
+   */
+  protected $patchesOptions;
+
+  /**
+   * @var array $installedPatches
+   */
+  protected $installedPatches;
+
+  /**
    * Apply plugin modifications to composer
    *
    * @param Composer    $composer
@@ -60,6 +70,7 @@ class Patches implements PluginInterface, EventSubscriberInterface {
     $this->eventDispatcher = $composer->getEventDispatcher();
     $this->executor = new ProcessExecutor($this->io);
     $this->patches = array();
+    $this->patchesOptions = array();
     $this->installedPatches = array();
   }
 
@@ -270,6 +281,22 @@ class Patches implements PluginInterface, EventSubscriberInterface {
   }
 
   /**
+   * Get the patches options from root composer.json
+   * @return Patches
+   * @throws \Exception
+   */
+  public function grabPatchesOptions() {
+    // Try to get the patches from the root composer.json.
+    $extra = $this->composer->getPackage()->getExtra();
+    if (isset($extra['patches-options'])) {
+      $this->io->write('<info>Gathering patches-options for root package.</info>');
+      return $extra['patches-options'];
+    }
+
+    return array();
+  }
+
+  /**
    * @param PackageEvent $event
    * @throws \Exception
    */
@@ -389,8 +416,18 @@ class Patches implements PluginInterface, EventSubscriberInterface {
     if (!empty($extra['patchLevel'][$package->getName()])){
       $patch_levels = array($extra['patchLevel'][$package->getName()]);
     }
+
     // Attempt to apply with git apply.
     $patched = $this->applyPatchWithGit($install_path, $patch_levels, $filename);
+
+    // Check if should apply the patch with binary options. We don't need this options for git
+    $binary_argument = '';
+    if (
+      !empty($this->patchesOptions[$package->getName()][$patch_url]['binary'])
+      && $this->patchesOptions[$package->getName()][$patch_url]['binary'] == TRUE
+    ) {
+      $binary_argument = '--binary';
+    }
 
     // In some rare cases, git will fail to apply a patch, fallback to using
     // the 'patch' command.
@@ -398,7 +435,7 @@ class Patches implements PluginInterface, EventSubscriberInterface {
       foreach ($patch_levels as $patch_level) {
         // --no-backup-if-mismatch here is a hack that fixes some
         // differences between how patch works on windows and unix.
-        if ($patched = $this->executeCommand("patch %s --no-backup-if-mismatch -d %s < %s", $patch_level, $install_path, $filename)) {
+        if ($patched = $this->executeCommand("patch %s %s --no-backup-if-mismatch -d %s < %s", $patch_level, $binary_argument, $install_path, $filename)) {
           break;
         }
       }
@@ -460,7 +497,7 @@ class Patches implements PluginInterface, EventSubscriberInterface {
     // Shell-escape all arguments except the command.
     $args = func_get_args();
     foreach ($args as $index => $arg) {
-      if ($index !== 0) {
+      if ($index !== 0 && !empty($arg)) {
         $args[$index] = escapeshellarg($arg);
       }
     }
