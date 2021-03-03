@@ -424,8 +424,6 @@ class Patches implements PluginInterface, EventSubscriberInterface
       $patch_levels = array($extra['patchLevel'][$package->getName()]);
     }
 
-    $this->io->write('<info>PATCHES OPTIONS' . var_export($this->patchesOptions[$package->getName()], true) . '</info>');
-
     // Attempt to apply with git apply.
     $patched = $this->applyPatchWithGit($install_path, $patch_levels, $filename);
 
