@@ -72,6 +72,11 @@ class Patches implements PluginInterface, EventSubscriberInterface, Capable
     protected $patchesResolved;
 
     /**
+     * @var array $patchesOptions
+     */
+    protected $patchesOptions;
+
+    /**
      * @var PatchCollection $patchCollection
      */
     protected $patchCollection;
@@ -89,6 +94,7 @@ class Patches implements PluginInterface, EventSubscriberInterface, Capable
         $this->eventDispatcher = $composer->getEventDispatcher();
         $this->executor = new ProcessExecutor($this->io);
         $this->patches = array();
+        $this->patchesOptions = array();
         $this->installedPatches = array();
         $this->patchesResolved = false;
         $this->patchCollection = new PatchCollection();
@@ -287,6 +293,22 @@ class Patches implements PluginInterface, EventSubscriberInterface, Capable
     }
 
     /**
+     * Get the patches options from root composer.json
+     * @return Patches
+     * @throws \Exception
+     */
+    public function grabPatchesOptions()
+    {
+        // Try to get the patches from the root composer.json.
+        $extra = $this->composer->getPackage()->getExtra();
+        if (isset($extra['patches-options'])) {
+            $this->io->write('<info>Gathering patches-options for root package.</info>');
+            return $extra['patches-options'];
+        }
+
+        return array();
+    }
+    /**
      * @param PackageEvent $event
      * @throws \Exception
      */
@@ -297,6 +319,11 @@ class Patches implements PluginInterface, EventSubscriberInterface, Capable
         /** @var PackageInterface $package */
         $package = $this->getPackageFromOperation($operation);
         $package_name = $package->getName();
+
+        $this->patchesOptions = $this->grabPatchesOptions();
+        if (empty($this->patchesOptions)) {
+            $this->io->write('<info>No patches options supplied.</info>');
+        }
 
         if (empty($this->patchCollection->getPatchesForPackage($package_name))) {
             if ($this->io->isVerbose()) {
@@ -327,7 +354,7 @@ class Patches implements PluginInterface, EventSubscriberInterface, Capable
                     null,
                     new PatchEvent(PatchEvents::PRE_PATCH_APPLY, $package, $patch->url, $patch->description)
                 );
-                $this->getAndApplyPatch($downloader, $install_path, $patch->url);
+                $this->getAndApplyPatch($downloader, $install_path, $patch->url, $package_name);
                 $this->eventDispatcher->dispatch(
                     null,
                     new PatchEvent(PatchEvents::POST_PATCH_APPLY, $package, $patch->url, $patch->description)
@@ -375,7 +402,7 @@ class Patches implements PluginInterface, EventSubscriberInterface, Capable
      * @param $patch_url
      * @throws \Exception
      */
-    protected function getAndApplyPatch(RemoteFilesystem $downloader, $install_path, $patch_url)
+    protected function getAndApplyPatch(RemoteFilesystem $downloader, $install_path, $patch_url, $packageName)
     {
 
         // Local patch file.
@@ -399,6 +426,16 @@ class Patches implements PluginInterface, EventSubscriberInterface, Capable
 
         // Modified from drush6:make.project.inc
         $patched = false;
+
+        // Check if should apply the patch with binary options. We don't need this options for git
+        $binary_argument = '';
+        if (
+            !empty($this->patchesOptions[$packageName][$patch_url]['binary'])
+            && $this->patchesOptions[$packageName][$patch_url]['binary'] == TRUE
+        ) {
+            $binary_argument = '--binary';
+        }
+
         // The order here is intentional. p1 is most likely to apply with git apply.
         // p0 is next likely. p2 is extremely unlikely, but for some special cases,
         // it might be useful. p4 is useful for Magento 2 patches
@@ -441,7 +478,7 @@ class Patches implements PluginInterface, EventSubscriberInterface, Capable
                 // --no-backup-if-mismatch here is a hack that fixes some
                 // differences between how patch works on windows and unix.
                 if ($patched = $this->executeCommand(
-                    "patch %s --no-backup-if-mismatch -d %s < %s",
+                    "patch %s $binary_argument --no-backup-if-mismatch -d %s < %s",
                     $patch_level,
                     $install_path,
                     $filename
